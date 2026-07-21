@@ -8,6 +8,7 @@ import {
 } from './common/http/correlation-id';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { TenantsModule } from './tenants/tenants.module';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { HealthModule } from './health/health.module';
     DatabaseModule,
     CacheModule,
     HealthModule,
+    TenantsModule,
   ],
 })
 export class AppModule {}

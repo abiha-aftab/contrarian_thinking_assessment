@@ -10,6 +10,9 @@ async function bootstrap(): Promise<void> {
   });
 
   app.useLogger(app.get(Logger));
+  app.setGlobalPrefix('api/v1', {
+    exclude: ['health/live', 'health/ready'],
+  });
   app.useGlobalPipes(
     new ValidationPipe({
       forbidNonWhitelisted: true,
