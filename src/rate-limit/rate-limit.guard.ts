@@ -33,10 +33,15 @@ export class RateLimitGuard implements CanActivate {
     const windowStart = Math.floor(Date.now() / (WINDOW_SECONDS * 1000));
     const key = `ratelimit:${tenantId}:${windowStart}`;
 
-    const count = await this.redis.incr(key);
-    if (count === 1) {
-      await this.redis.expire(key, WINDOW_SECONDS);
-    }
+    // INCR and EXPIRE travel in one MULTI so a crash between them cannot leave
+    // a counter without a TTL. Re-arming the TTL is harmless: the window index
+    // is part of the key, so a later window never reuses this counter.
+    const results = await this.redis
+      .multi()
+      .incr(key)
+      .expire(key, WINDOW_SECONDS)
+      .exec();
+    const count = Number(results?.[0]?.[1] ?? 0);
 
     if (count > limit) {
       const response = context.switchToHttp().getResponse<Response>();

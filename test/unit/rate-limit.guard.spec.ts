@@ -16,7 +16,16 @@ function contextFor(
 describe('RateLimitGuard', () => {
   const incr = jest.fn();
   const expire = jest.fn();
-  const redis = { incr, expire };
+  const exec = jest.fn();
+  const transaction = { incr, expire, exec };
+  const redis = { multi: jest.fn(() => transaction) };
+
+  function counterAt(count: number): void {
+    exec.mockResolvedValue([
+      [null, count],
+      [null, 1],
+    ]);
+  }
   const config = {
     get: jest.fn().mockReturnValue(2),
   };
@@ -24,11 +33,13 @@ describe('RateLimitGuard', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    incr.mockReturnValue(transaction);
+    expire.mockReturnValue(transaction);
     config.get.mockReturnValue(2);
   });
 
   it('allows requests under the tenant limit', async () => {
-    incr.mockResolvedValue(1);
+    counterAt(1);
     const guard = new RateLimitGuard(redis as never, config as never);
     const request = { tenant: { id: 'tenant-1' } };
 
@@ -38,21 +49,23 @@ describe('RateLimitGuard', () => {
     expect(incr).toHaveBeenCalledWith(expect.stringContaining('tenant-1'));
   });
 
-  it('sets an expiry when opening a new rate limit window', async () => {
-    incr.mockResolvedValue(1);
+  it('sets the counter and its expiry in one transaction', async () => {
+    counterAt(1);
     const guard = new RateLimitGuard(redis as never, config as never);
     const request = { tenant: { id: 'tenant-1' } };
 
     await guard.canActivate(contextFor(request, { setHeader }));
 
+    expect(redis.multi).toHaveBeenCalledTimes(1);
     expect(expire).toHaveBeenCalledWith(
       expect.stringContaining('tenant-1'),
       60,
     );
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it('rejects requests over the limit with HTTP 429 and Retry-After', async () => {
-    incr.mockResolvedValue(3);
+    counterAt(3);
     const guard = new RateLimitGuard(redis as never, config as never);
     const request = { tenant: { id: 'tenant-1' } };
 
@@ -68,6 +81,6 @@ describe('RateLimitGuard', () => {
     await expect(
       guard.canActivate(contextFor({}, { setHeader })),
     ).resolves.toBe(true);
-    expect(incr).not.toHaveBeenCalled();
+    expect(redis.multi).not.toHaveBeenCalled();
   });
 });
