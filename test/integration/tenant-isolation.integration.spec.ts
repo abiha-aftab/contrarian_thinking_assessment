@@ -1,8 +1,9 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../../src/app.module';
+import { configureApp } from '../../src/app.setup';
 
 interface RegisteredTenant {
   id: string;
@@ -33,16 +34,7 @@ describe('tenant isolation and environment scoping (integration)', () => {
     }).compile();
 
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api/v1', {
-      exclude: ['health/live', 'health/ready', 'metrics'],
-    });
-    app.useGlobalPipes(
-      new ValidationPipe({
-        forbidNonWhitelisted: true,
-        transform: true,
-        whitelist: true,
-      }),
-    );
+    configureApp(app);
     await app.init();
     http = app.getHttpServer() as App;
 
@@ -187,6 +179,24 @@ describe('tenant isolation and environment scoping (integration)', () => {
       ).find((f) => f.key === flagKey);
       expect(flag).toBeDefined();
       expect(Object.keys(flag!.environments)).toEqual(['staging']);
+    });
+  });
+
+  describe('metrics', () => {
+    it('counts guard rejections under the route template', async () => {
+      await request(http)
+        .get(`/api/v1/tenants/${tenantA.id}/flags`)
+        .expect(401);
+      await request(http).get('/does-not-exist').expect(404);
+
+      const response = await request(http).get('/metrics').expect(200);
+      const text = response.text;
+
+      expect(text).toMatch(
+        /http_requests_total\{method="GET",route="\/api\/v1\/tenants\/:tenantId\/flags",status="401",tenant="anonymous"\} \d+/,
+      );
+      expect(text).toContain('route="unmatched",status="404"');
+      expect(text).not.toContain('does-not-exist');
     });
   });
 

@@ -1,8 +1,8 @@
 import 'reflect-metadata';
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
@@ -10,16 +10,7 @@ async function bootstrap(): Promise<void> {
   });
 
   app.useLogger(app.get(Logger));
-  app.setGlobalPrefix('api/v1', {
-    exclude: ['health/live', 'health/ready', 'metrics'],
-  });
-  app.useGlobalPipes(
-    new ValidationPipe({
-      forbidNonWhitelisted: true,
-      transform: true,
-      whitelist: true,
-    }),
-  );
+  configureApp(app);
   app.enableShutdownHooks();
 
   const port = Number(process.env.PORT ?? 3000);
