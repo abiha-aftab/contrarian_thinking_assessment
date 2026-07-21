@@ -7,8 +7,10 @@ import {
   resolveCorrelationId,
 } from './common/http/correlation-id';
 import { DatabaseModule } from './database/database.module';
+import { EvaluationModule } from './evaluation/evaluation.module';
 import { FlagsModule } from './flags/flags.module';
 import { HealthModule } from './health/health.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { TenantsModule } from './tenants/tenants.module';
 
 @Module({
@@ -38,9 +40,11 @@ import { TenantsModule } from './tenants/tenants.module';
     }),
     DatabaseModule,
     CacheModule,
+    MetricsModule,
     HealthModule,
     TenantsModule,
     FlagsModule,
+    EvaluationModule,
   ],
 })
 export class AppModule {}
