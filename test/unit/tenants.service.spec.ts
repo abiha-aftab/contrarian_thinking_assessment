@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { TenantsService } from '../../src/tenants/tenants.service';
 
 type TransactionCallback = (tx: unknown) => Promise<unknown>;
@@ -63,5 +63,14 @@ describe('TenantsService', () => {
     await expect(
       service.createTenant({ name: 'Checkout App' }),
     ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects a name that has no letters or digits to build a slug from', async () => {
+    const service = new TenantsService(prisma as never);
+
+    await expect(service.createTenant({ name: '!!!' })).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(tenantCreate).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,8 @@
-import { ConflictException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { EnvironmentName } from '@prisma/client';
 import { PrismaService } from '../database/prisma.service';
 import { generateApiKey } from './api-key.util';
@@ -34,6 +38,12 @@ export class TenantsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async createTenant(dto: CreateTenantDto): Promise<CreatedTenant> {
+    const slug = slugify(dto.name);
+    if (!slug) {
+      throw new BadRequestException(
+        'name must contain at least one letter or digit',
+      );
+    }
     const key = generateApiKey();
 
     try {
@@ -41,7 +51,7 @@ export class TenantsService {
         tx.tenant.create({
           data: {
             name: dto.name,
-            slug: slugify(dto.name),
+            slug,
             environments: {
               create: ENVIRONMENT_NAMES.map((name) => ({ name })),
             },
@@ -74,7 +84,7 @@ export class TenantsService {
     } catch (error) {
       if ((error as { code?: string }).code === 'P2002') {
         throw new ConflictException(
-          `A tenant with the slug "${slugify(dto.name)}" already exists`,
+          `A tenant with the slug "${slug}" already exists`,
         );
       }
       throw error;
