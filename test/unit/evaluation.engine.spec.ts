@@ -151,6 +151,50 @@ describe('evaluateFlag', () => {
     });
   });
 
+  it('matches numeric and boolean context values against string rule values', () => {
+    const flag = booleanFlag({
+      config: {
+        enabled: true,
+        rolloutPercentage: 0,
+        targetingRules: [
+          { attribute: 'plan_tier', values: ['3'] },
+          { attribute: 'beta', values: ['true'] },
+        ],
+        variantValue: null,
+      },
+    });
+
+    expect(evaluateFlag(flag, 'user-123', { plan_tier: 3 }).reason).toBe(
+      'targeting_match',
+    );
+    expect(evaluateFlag(flag, 'user-123', { beta: true }).reason).toBe(
+      'targeting_match',
+    );
+    expect(evaluateFlag(flag, 'user-123', { plan_tier: 2 }).reason).toBe(
+      'not_in_rollout',
+    );
+  });
+
+  it('ignores object and null context values when matching rules', () => {
+    const flag = booleanFlag({
+      config: {
+        enabled: true,
+        rolloutPercentage: 0,
+        targetingRules: [
+          { attribute: 'country', values: ['null', '[object Object]'] },
+        ],
+        variantValue: null,
+      },
+    });
+
+    expect(evaluateFlag(flag, 'user-123', { country: null }).reason).toBe(
+      'not_in_rollout',
+    );
+    expect(evaluateFlag(flag, 'user-123', { country: {} }).reason).toBe(
+      'not_in_rollout',
+    );
+  });
+
   it('is deterministic for the same user and flag', () => {
     const flag = booleanFlag({
       config: { ...booleanFlag().config, rolloutPercentage: 50 },

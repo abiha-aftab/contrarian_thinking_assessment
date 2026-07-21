@@ -45,11 +45,23 @@ function matchesTargeting(
     return false;
   }
   return rules.some((rule) => {
-    const contextValue = context[rule.attribute];
-    return (
-      typeof contextValue === 'string' && rule.values.includes(contextValue)
-    );
+    const contextValue = asRuleValue(context[rule.attribute]);
+    return contextValue !== null && rule.values.includes(contextValue);
   });
+}
+
+// Rule values are stored as strings, while SDK contexts often carry numbers or
+// booleans (`{"plan_tier": 3}`), so scalars are compared by their string form.
+function asRuleValue(value: unknown): string | null {
+  switch (typeof value) {
+    case 'string':
+      return value;
+    case 'number':
+    case 'boolean':
+      return String(value);
+    default:
+      return null;
+  }
 }
 
 export function evaluateFlag(
