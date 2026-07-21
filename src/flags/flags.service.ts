@@ -251,19 +251,21 @@ export class FlagsService {
 
       const before = snapshot(flag);
 
-      if (dto.description !== undefined || dto.defaultValue !== undefined) {
-        await tx.featureFlag.update({
-          where: { id: flag.id },
-          data: {
-            ...(dto.description !== undefined && {
-              description: dto.description,
-            }),
-            ...(dto.defaultValue !== undefined && {
-              defaultValue: dto.defaultValue,
-            }),
-          },
-        });
-      }
+      // The flag row is touched even for environment-only changes so that
+      // updatedAt reflects the latest change to any part of the flag.
+      const { updatedAt } = await tx.featureFlag.update({
+        where: { id: flag.id },
+        data: {
+          ...(dto.description !== undefined && {
+            description: dto.description,
+          }),
+          ...(dto.defaultValue !== undefined && {
+            defaultValue: dto.defaultValue,
+          }),
+          updatedAt: new Date(),
+        },
+        select: { updatedAt: true },
+      });
 
       if (dto.environment) {
         const config = flag.configs.find(
@@ -293,7 +295,7 @@ export class FlagsService {
         });
       }
 
-      const updated = applyUpdates(flag, dto);
+      const updated = { ...applyUpdates(flag, dto), updatedAt };
 
       await tx.auditLog.create({
         data: {
@@ -330,12 +332,13 @@ export class FlagsService {
 
       const before = snapshot(flag);
 
-      await tx.featureFlag.update({
+      const { updatedAt } = await tx.featureFlag.update({
         where: { id: flag.id },
         data: { status: 'archived' },
+        select: { updatedAt: true },
       });
 
-      const archived: FlagRecord = { ...flag, status: 'archived' };
+      const archived: FlagRecord = { ...flag, status: 'archived', updatedAt };
 
       await tx.auditLog.create({
         data: {

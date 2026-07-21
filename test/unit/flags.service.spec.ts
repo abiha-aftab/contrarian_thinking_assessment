@@ -69,8 +69,11 @@ describe('FlagsService', () => {
   };
   const cache = { invalidate: jest.fn() };
 
+  const UPDATED_AT = new Date('2026-07-22T09:30:00Z');
+
   beforeEach(() => {
     jest.clearAllMocks();
+    tx.featureFlag.update.mockResolvedValue({ updatedAt: UPDATED_AT });
   });
 
   function service(): FlagsService {
@@ -190,6 +193,13 @@ describe('FlagsService', () => {
 
       expect(result.environments.production.enabled).toBe(true);
       expect(result.environments.production.rolloutPercentage).toBe(25);
+      expect(tx.featureFlag.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'flag-1' },
+          data: { updatedAt: expect.any(Date) },
+        }),
+      );
+      expect(result.updatedAt).toEqual(UPDATED_AT);
       expect(cache.invalidate).toHaveBeenCalledWith(TENANT_ID, 'new-checkout');
     });
 
@@ -203,10 +213,12 @@ describe('FlagsService', () => {
         ACTOR,
       );
 
-      expect(tx.featureFlag.update).toHaveBeenCalledWith({
-        where: { id: 'flag-1' },
-        data: expect.objectContaining({ defaultValue: true }),
-      });
+      expect(tx.featureFlag.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'flag-1' },
+          data: expect.objectContaining({ defaultValue: true }),
+        }),
+      );
       expect(result.defaultValue).toBe(true);
     });
 
@@ -274,11 +286,13 @@ describe('FlagsService', () => {
       expect(tx.featureFlag.update).toHaveBeenCalledWith({
         where: { id: 'flag-1' },
         data: { status: 'archived' },
+        select: { updatedAt: true },
       });
       expect(tx.auditLog.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ action: 'archived' }),
       });
       expect(result.status).toBe('archived');
+      expect(result.updatedAt).toEqual(UPDATED_AT);
       expect(cache.invalidate).toHaveBeenCalledWith(TENANT_ID, 'new-checkout');
     });
 
