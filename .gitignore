@@ -1,0 +1,25 @@
+node_modules/
+project_venv/
+dist/
+build/
+coverage/
+tmp/
+.cache/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+logs/
+.DS_Store
+.github/
+1784325272226_CT_-_Take_Home_Test_-_Software_Engineer_-_Backend_Platform_-_Option_C_Feature_Flags.pdf
+
+# Local database volumes and Terraform state
+.data/
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl.bak
+infra/terraform/envs/*/terraform.tfvars
+infra/terraform/envs/*/.terraform/
