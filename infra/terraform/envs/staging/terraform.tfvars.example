@@ -1,0 +1,9 @@
+project_id               = "YOUR_GCP_PROJECT_ID"
+region                   = "us-central1"
+environment              = "staging"
+image                    = "us-central1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/ff-staging-images/feature-flag-service:latest"
+db_tier                  = "db-f1-micro"
+redis_memory_gb          = 1
+cloud_run_min_instances  = 0
+cloud_run_max_instances  = 5
+alert_email              = ""

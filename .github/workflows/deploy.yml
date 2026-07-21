@@ -1,0 +1,149 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      canary_percent:
+        description: Initial canary traffic percentage
+        required: true
+        default: '10'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGION: us-central1
+  IMAGE_NAME: feature-flag-service
+
+jobs:
+  deploy:
+    name: Build, push, canary deploy
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'staging' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Resolve image coordinates
+        id: image
+        run: |
+          ENV="${{ github.event.inputs.environment || 'staging' }}"
+          REPO="${{ env.REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/ff-${ENV}-images"
+          TAG="${GITHUB_SHA}"
+          echo "repo=${REPO}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "full=${REPO}/${{ env.IMAGE_NAME }}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "latest=${REPO}/${{ env.IMAGE_NAME }}:latest" >> "$GITHUB_OUTPUT"
+          echo "service=ff-${ENV}-api" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.image.outputs.full }}
+            ${{ steps.image.outputs.latest }}
+          platforms: linux/amd64
+
+      - name: Deploy new Cloud Run revision at 0% traffic
+        id: deploy
+        run: |
+          gcloud run deploy "${{ steps.image.outputs.service }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --image="${{ steps.image.outputs.full }}" \
+            --no-traffic \
+            --tag=canary \
+            --quiet
+          echo "revision=$(gcloud run revisions list \
+            --service="${{ steps.image.outputs.service }}" \
+            --region="${{ env.REGION }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --sort-by="~creationTimestamp" \
+            --limit=1 \
+            --format='value(name)')" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test canary revision
+        id: smoke
+        run: |
+          URL=$(gcloud run services describe "${{ steps.image.outputs.service }}" \
+            --region="${{ env.REGION }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --format='value(status.url)')
+          # Tagged revision URLs: https://canary---SERVICE-HASH.a.run.app
+          HOST=$(echo "$URL" | sed 's#https://##')
+          CANARY="https://canary---${HOST}"
+          curl --fail --retry 10 --retry-delay 3 --silent "${CANARY}/health/live"
+          curl --fail --retry 10 --retry-delay 3 --silent "${CANARY}/health/ready"
+          echo "canary_url=${CANARY}" >> "$GITHUB_OUTPUT"
+
+      - name: Shift canary traffic
+        run: |
+          PCT="${{ github.event.inputs.canary_percent || '10' }}"
+          gcloud run services update-traffic "${{ steps.image.outputs.service }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --to-tags=canary=${PCT} \
+            --quiet
+          sleep 20
+          gcloud run services update-traffic "${{ steps.image.outputs.service }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --to-tags=canary=50 \
+            --quiet
+          sleep 20
+          gcloud run services update-traffic "${{ steps.image.outputs.service }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --to-latest \
+            --quiet
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outcome == 'success'
+        run: |
+          echo "Smoke/canary failed — routing 100% traffic back to previous stable revision"
+          gcloud run services update-traffic "${{ steps.image.outputs.service }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --region="${{ env.REGION }}" \
+            --to-revisions=LATEST=0 \
+            --quiet || true
+          # Prefer the previous non-canary revision if one exists.
+          PREV=$(gcloud run revisions list \
+            --service="${{ steps.image.outputs.service }}" \
+            --region="${{ env.REGION }}" \
+            --project="${{ secrets.GCP_PROJECT_ID }}" \
+            --sort-by="~creationTimestamp" \
+            --format='value(name)' | sed -n '2p')
+          if [ -n "$PREV" ]; then
+            gcloud run services update-traffic "${{ steps.image.outputs.service }}" \
+              --project="${{ secrets.GCP_PROJECT_ID }}" \
+              --region="${{ env.REGION }}" \
+              --to-revisions="${PREV}=100" \
+              --quiet
+          fi

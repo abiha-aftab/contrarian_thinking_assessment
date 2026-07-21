@@ -5,13 +5,15 @@ the Contrarian Thinking Backend & Platform take-home assessment.
 
 ## Current status
 
-Phases 1–4 establish the NestJS application, PostgreSQL/Prisma data model,
+Phases 1–6 establish the NestJS application, PostgreSQL/Prisma data model,
 Redis connection, structured request logging, correlation IDs, health checks,
 tenant registration with hashed API keys, tenant-scoped authentication guards,
 per-tenant rate limiting, full feature flag CRUD with environment-scoped
-configs, soft-delete (archive), an immutable audit trail, and the deterministic
-flag evaluation engine with Redis caching and Prometheus metrics.
-Infrastructure and deployment are implemented in subsequent phases.
+configs, soft-delete (archive), an immutable audit trail, the deterministic
+flag evaluation engine with Redis caching and Prometheus metrics, a production
+Docker image, modular Terraform for GCP, and GitHub Actions CI/CD with Cloud
+Run canary deployment. Phase 7 completes documentation and the live GCP
+deployment URL.
 
 ## Prerequisites
 
@@ -23,11 +25,17 @@ Infrastructure and deployment are implemented in subsequent phases.
 ```bash
 nvm use
 cp .env.example .env
-docker compose up -d
+docker compose up -d postgres redis
 npm install
 npm run prisma:generate
 npm run prisma:migrate -- --name init
 npm run start:dev
+```
+
+Or run the full stack (API + Postgres + Redis) in containers:
+
+```bash
+docker compose up --build
 ```
 
 The API listens on `http://localhost:3000`.
@@ -321,6 +329,73 @@ npm run start:prod &   # with RATE_LIMIT_PER_MINUTE=1000000
 docker run --rm -i -e BASE_URL=http://host.docker.internal:3010 \
   grafana/k6 run - < load/k6-evaluate.js
 ```
+
+## Containerization
+
+The production image (`docker/Dockerfile`) is a multi-stage build:
+
+1. **build** — `npm ci` + Prisma generate + NestJS compile
+2. **prod-deps** — production `npm ci --omit=dev` + Prisma generate
+3. **runtime** — Debian slim, non-root `app` user, `tini` init, healthcheck
+   against `/health/live`, entrypoint that optionally runs
+   `prisma migrate deploy`
+
+Local full-stack:
+
+```bash
+docker compose up --build
+curl http://localhost:3000/health/ready
+```
+
+## Infrastructure & deployment (GCP)
+
+See [`infra/README.md`](infra/README.md) for the full Terraform layout and
+first-time setup. Summary of choices:
+
+| Layer | Choice | Why |
+|-------|--------|-----|
+| Compute | Cloud Run | Public URL in minutes; native canary traffic splitting; scales to zero |
+| Database | Cloud SQL PostgreSQL 15 (private IP) | Required; managed backups/PITR |
+| Cache | Memorystore Redis 7 BASIC | Required; BASIC keeps staging cheap |
+| Secrets | Secret Manager | DB password / `DATABASE_URL` / `REDIS_URL` never in plain env |
+| Images | Artifact Registry | Fed by the deploy workflow |
+| Networking | VPC + Serverless VPC Access | Cloud Run reaches private SQL/Redis |
+
+### Canary deployment & rollback
+
+The [deploy workflow](.github/workflows/deploy.yml) implements canary:
+
+1. Build/push image tagged with the git SHA.
+2. `gcloud run deploy --no-traffic --tag=canary` → new revision at **0%**.
+3. Smoke `/health/live` and `/health/ready` against the tagged canary URL.
+4. Shift traffic 10% → 50% → 100%.
+5. On any failure after the deploy step, traffic is routed back to the
+   previous revision (automatic rollback).
+
+Terraform provisions the service once and then ignores image/traffic so a
+`terraform apply` cannot clobber an in-progress canary.
+
+### CI pipeline
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every PR/push:
+
+Lint → unit tests → build → integration tests (Postgres + Redis service
+containers) → Docker image build (no push).
+
+### Observability on GCP
+
+Terraform creates a Cloud Monitoring dashboard (request rate, latency, 5xx,
+instance count) and alert policies for:
+
+- Error rate spikes (>5% over a 5-minute window)
+- Elevated request latency
+- Health / instance availability failures
+
+Application-level Prometheus metrics (`/metrics`) complement these with
+per-tenant evaluation latency, evaluation counts, and cache hit/miss ratios.
+In a longer engagement these would be scraped into Cloud Monitoring via the
+Managed Service for Prometheus; for the take-home the Cloud Run request
+metrics cover the operational alerts.
 
 ## Architecture
 

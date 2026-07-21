@@ -11,3 +11,6 @@ coverage/
 *.tfstate
 *.tfstate.*
 .terraform/
+.terraform.lock.hcl.bak
+infra/terraform/envs/*/terraform.tfvars
+infra/terraform/envs/*/.terraform/
