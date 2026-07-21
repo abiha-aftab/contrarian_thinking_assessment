@@ -1,101 +1,82 @@
 # Infrastructure
 
-Terraform modules that provision the GCP stack for the feature-flag service.
+Terraform for running the feature-flag service on Google Cloud. Nothing here is
+needed for local development; `docker compose up` covers that.
 
 ## Layout
 
 ```
 infra/terraform/
-├── modules/           # Reusable building blocks
-│   ├── apis/
-│   ├── networking/    # VPC, private service access
-│   ├── iam/           # Least-privilege runtime service account
-│   ├── secrets/       # Secret Manager (DB password, DATABASE_URL, REDIS_URL)
-│   ├── cloudsql/      # Private IP PostgreSQL 15
-│   ├── redis/         # Memorystore Redis 7 (BASIC tier for staging)
-│   ├── artifact_registry/
-│   ├── cloudrun/      # Cloud Run service with probes + secret env
-│   └── monitoring/    # Dashboard + alert policies
+├── modules/
+│   ├── apis/               # Enables the required Google APIs
+│   ├── networking/         # VPC and private service access
+│   ├── iam/                # Least-privilege runtime service account
+│   ├── secrets/            # Secret Manager: DB password, DATABASE_URL, REDIS_URL
+│   ├── cloudsql/           # Private-IP PostgreSQL 15
+│   ├── redis/              # Memorystore Redis 7 (BASIC tier)
+│   ├── artifact_registry/  # Docker image repository
+│   ├── cloudrun/           # Cloud Run service with probes and secret env
+│   └── monitoring/         # Dashboard and alert policies
 └── envs/
     ├── staging/
     └── production/
 ```
 
-## Why these GCP services
+Each environment composes the same modules with its own sizing in
+`terraform.tfvars` (copy it from `terraform.tfvars.example`). Remote state in a
+GCS bucket is optional and commented out in `backend.tf`.
+
+## Why these services
 
 | Need | Choice | Why |
 |------|--------|-----|
-| Compute | Cloud Run | Fastest path to a public URL; native revision traffic splitting for canary/blue-green; scales to zero in staging |
-| Database | Cloud SQL PostgreSQL 15 (private IP) | Required by the assessment; managed backups and PITR |
-| Cache | Memorystore Redis BASIC | Required; BASIC is enough for staging cost; production can flip to STANDARD_HA |
-| Secrets | Secret Manager | Never bake credentials into images or plain env vars |
-| Images | Artifact Registry | Required by the CI/CD flow |
-| Networking | VPC | Cloud Run reaches private Cloud SQL / Redis |
-| Observability | Cloud Monitoring | Dashboard + alerts for error rate, latency, health |
+| Compute | Cloud Run | Public HTTPS URL without a cluster; revision traffic splitting allows canary rollouts; staging scales to zero |
+| Database | Cloud SQL PostgreSQL 15, private IP | Managed backups and point-in-time recovery |
+| Cache | Memorystore Redis | BASIC is enough for staging; production can switch to STANDARD_HA |
+| Secrets | Secret Manager | Credentials are injected at runtime, never baked into images |
+| Images | Artifact Registry | Same project and region as Cloud Run |
+| Networking | VPC | Cloud Run reaches the private Cloud SQL and Redis instances |
+| Observability | Cloud Monitoring | Dashboard plus alerts on error rate, latency and health |
 
-## Deployment strategy: Cloud Run canary
-
-1. CI builds and pushes a new image tagged with the git SHA.
-2. `gcloud run deploy --no-traffic --tag=canary` creates a new revision receiving
-   **0%** of production traffic.
-3. Smoke tests hit the tagged canary URL (`https://canary---…`).
-4. Traffic shifts: 10% → 50% → 100% (`--to-latest`).
-5. On smoke/canary failure the workflow routes 100% back to the previous
-   revision — automatic rollback.
-
-Terraform manages the service, secrets, networking, and monitoring, but
-**ignores** image and traffic changes so a `terraform apply` cannot reset an
-in-progress canary.
-
-## First-time setup
+## Provisioning
 
 ```bash
-# 1. Create a GCP project and enable billing (free tier / $300 credits).
-# 2. Authenticate locally.
 gcloud auth application-default login
 gcloud config set project YOUR_GCP_PROJECT_ID
 
-# 3. Optional remote state bucket.
-gsutil mb -l us-central1 gs://YOUR_TF_STATE_BUCKET
-
-# 4. Copy and fill tfvars.
 cd infra/terraform/envs/staging
-cp terraform.tfvars.example terraform.tfvars
-# edit project_id / image
-
-# 5. Apply (first apply provisions Artifact Registry; push an image, then
-#    re-apply or set image to a public placeholder for the initial create).
+cp terraform.tfvars.example terraform.tfvars   # set project_id and image
 terraform init
 terraform plan
 terraform apply
 ```
 
-## GitHub Actions → GCP (Workload Identity Federation)
+The first apply creates the Artifact Registry repository. Push an image to it
+(or point `image` at a public placeholder for the first run), then apply again.
 
-Production-standard auth: GitHub OIDC → Workload Identity Pool → deploy
-service account. **No JSON key** is stored in GitHub.
+## Rolling out a new image
 
-### One-time setup
+Terraform deliberately ignores the Cloud Run image and traffic split
+(`lifecycle.ignore_changes` in `modules/cloudrun`), so a canary can be run by
+hand without the next `terraform apply` undoing it:
 
 ```bash
-export GCP_PROJECT_ID=future-infusion-503216-p3
-export GITHUB_REPO=<owner>/contrarian_thinking_assessment
-export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+IMAGE=us-central1-docker.pkg.dev/$PROJECT/ff-staging-images/feature-flag-service:$TAG
+docker build -f docker/Dockerfile -t "$IMAGE" . && docker push "$IMAGE"
 
-bash scripts/setup-github-wif.sh
+# New revision with 0% traffic, reachable on its own tagged URL
+gcloud run deploy ff-staging-api --image "$IMAGE" --region us-central1 \
+  --no-traffic --tag canary
+curl -fsS "https://canary---<service-url-host>/health/ready"
+
+# Shift traffic in steps, or send it all back to the previous revision
+gcloud run services update-traffic ff-staging-api --region us-central1 --to-tags canary=10
+gcloud run services update-traffic ff-staging-api --region us-central1 --to-latest
 ```
 
-The script prints three values. Add them as **repository secrets**:
-
-| Secret | Meaning |
-|--------|---------|
-| `GCP_PROJECT_ID` | GCP project ID |
-| `GCP_DEPLOY_SA` | `github-deploy@….iam.gserviceaccount.com` |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full provider resource name |
-
-Then push to `main`. The Deploy workflow uses
-`google-github-actions/auth` with `workload_identity_provider` +
-`service_account` and `permissions.id-token: write`.
+Migrations run on container start (`RUN_MIGRATIONS=true`, `prisma migrate
+deploy`), so the new revision applies any pending schema changes before it
+serves traffic.
 
 ## Teardown
 
