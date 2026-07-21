@@ -3,13 +3,13 @@ import { check } from 'k6';
 
 // Load test for the flag evaluation hot path.
 //
-// Usage (local server on :3010):
-//   docker run --rm -i -e BASE_URL=http://host.docker.internal:3010 \
+// Usage (local server on :3000):
+//   docker run --rm -i -e BASE_URL=http://host.docker.internal:3000 \
 //     grafana/k6 run - < load/k6-evaluate.js
 // or with a local k6 binary:
-//   BASE_URL=http://localhost:3010 k6 run load/k6-evaluate.js
+//   BASE_URL=http://localhost:3000 k6 run load/k6-evaluate.js
 
-const BASE_URL = __ENV.BASE_URL || 'http://localhost:3010';
+const BASE_URL = __ENV.BASE_URL || 'http://localhost:3000';
 const API = `${BASE_URL}/api/v1`;
 
 export const options = {

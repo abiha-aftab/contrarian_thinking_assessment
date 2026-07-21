@@ -3,7 +3,7 @@
 # caching, tenant isolation, and metrics exposure.
 set -euo pipefail
 
-BASE="http://localhost:${PORT:-3010}/api/v1"
+BASE="http://localhost:${PORT:-3000}/api/v1"
 SUFFIX="$(date +%s)"
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d$1)"; }
@@ -91,7 +91,7 @@ AFTER=$(evaluate "user-42" "new-checkout" '{}')
 echo "invalidation OK: $AFTER"
 
 echo "== metrics endpoint exposes evaluation counters =="
-METRICS=$(curl -fsS "http://localhost:${PORT:-3010}/metrics")
+METRICS=$(curl -fsS "http://localhost:${PORT:-3000}/metrics")
 echo "$METRICS" | grep -q 'flag_evaluations_total' || { echo "FAIL: no evaluation metric"; exit 1; }
 echo "$METRICS" | grep -q 'flag_config_cache_events_total' || { echo "FAIL: no cache metric"; exit 1; }
 echo "$METRICS" | grep -q 'http_requests_total' || { echo "FAIL: no http metric"; exit 1; }

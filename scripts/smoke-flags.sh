@@ -2,7 +2,7 @@
 # End-to-end smoke test for tenant + flag CRUD, audit history, and isolation.
 set -euo pipefail
 
-BASE="http://localhost:${PORT:-3010}/api/v1"
+BASE="http://localhost:${PORT:-3000}/api/v1"
 SUFFIX="$(date +%s)"
 
 json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d$1)"; }
