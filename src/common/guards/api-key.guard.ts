@@ -17,6 +17,7 @@ export interface AuthenticatedTenant {
   id: string;
   name: string;
   slug: string;
+  keyPrefix: string;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -65,6 +66,7 @@ export class ApiKeyGuard implements CanActivate {
       id: matched.tenant.id,
       name: matched.tenant.name,
       slug: matched.tenant.slug,
+      keyPrefix: matched.keyPrefix,
     };
 
     return true;

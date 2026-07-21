@@ -5,11 +5,12 @@ the Contrarian Thinking Backend & Platform take-home assessment.
 
 ## Current status
 
-Phases 1 and 2 establish the NestJS application, PostgreSQL/Prisma data model,
+Phases 1–3 establish the NestJS application, PostgreSQL/Prisma data model,
 Redis connection, structured request logging, correlation IDs, health checks,
 tenant registration with hashed API keys, tenant-scoped authentication guards,
-and per-tenant rate limiting. Flag management, evaluation, infrastructure, and
-deployment are implemented in subsequent phases.
+per-tenant rate limiting, and full feature flag CRUD with environment-scoped
+configs, soft-delete (archive), and an immutable audit trail. Flag evaluation,
+infrastructure, and deployment are implemented in subsequent phases.
 
 ## Prerequisites
 
@@ -83,6 +84,80 @@ values (unlike passwords), a fast digest is appropriate and keeps per-request
 verification cheap. Lookup uses an indexed key prefix and a constant-time hash
 comparison. A key for one tenant cannot access another tenant's resources
 (`403 Forbidden`).
+
+### Feature flags
+
+All flag endpoints require the tenant's API key and are scoped to
+`/api/v1/tenants/{tenantId}/flags`. A key for another tenant receives
+`403 Forbidden`; a missing key receives `401 Unauthorized`.
+
+Create a flag (`201 Created`). A config is created for each of the tenant's
+three environments, initially disabled with a 0% rollout:
+
+```bash
+curl -X POST "$BASE/tenants/$TENANT_ID/flags" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"key":"new-checkout","description":"New checkout flow","type":"boolean","defaultValue":false}'
+```
+
+Flag types are `boolean`, `string`, and `number`; the `defaultValue` (and any
+`variantValue`) must match the declared type or the request fails with `400`.
+Duplicate keys within a tenant fail with `409`.
+
+Update a flag (`200 OK`). `description` and `defaultValue` are flag-level;
+`enabled`, `rolloutPercentage` (0–100), `targetingRules`, and `variantValue`
+are environment-level and require `environment`:
+
+```bash
+curl -X PUT "$BASE/tenants/$TENANT_ID/flags/new-checkout" \
+  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
+  -d '{"environment":"production","enabled":true,"rolloutPercentage":25}'
+```
+
+Targeting rules are a list of context-attribute matches, e.g.
+`[{"attribute":"country","values":["US","CA"]}]`.
+
+List flags with optional filters (`200 OK`):
+
+```bash
+curl "$BASE/tenants/$TENANT_ID/flags?environment=production&status=active" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Archive (soft-delete) a flag (`200 OK`). Archived flags remain listable via
+`status=archived` but can no longer be updated (`404`):
+
+```bash
+curl -X DELETE "$BASE/tenants/$TENANT_ID/flags/new-checkout" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+### Audit history
+
+Every create, update, and archive writes an append-only audit record in the
+same database transaction as the change itself, capturing the actor (API key
+prefix), the action, and full before/after snapshots. There are no update or
+delete endpoints for audit records.
+
+```bash
+curl "$BASE/tenants/$TENANT_ID/flags/new-checkout/history" \
+  -H "Authorization: Bearer $API_KEY"
+```
+
+Response entries are newest-first:
+
+```json
+[
+  {
+    "id": "…",
+    "actor": "apikey:VJJd26vW",
+    "action": "updated",
+    "beforeValue": { "environments": { "production": { "enabled": false } } },
+    "afterValue": { "environments": { "production": { "enabled": true } } },
+    "createdAt": "2026-07-21T14:52:00.000Z"
+  }
+]
+```
 
 ### Rate limiting
 

@@ -23,7 +23,7 @@ describe('ApiKeyGuard', () => {
     jest.clearAllMocks();
   });
 
-  it('attaches the tenant to the request for a valid key', async () => {
+  it('attaches the tenant and key prefix to the request for a valid key', async () => {
     const key = generateApiKey();
     findMany.mockResolvedValue([
       { keyHash: key.hash, keyPrefix: key.prefix, tenantId: tenant.id, tenant },
@@ -35,7 +35,7 @@ describe('ApiKeyGuard', () => {
     };
 
     await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
-    expect(request.tenant).toEqual(tenant);
+    expect(request.tenant).toEqual({ ...tenant, keyPrefix: key.prefix });
   });
 
   it('rejects requests without an Authorization bearer header', async () => {
