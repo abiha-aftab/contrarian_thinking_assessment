@@ -270,8 +270,56 @@ window. Exceeding the limit returns `429 Too Many Requests` with a
 
 ```bash
 npm run lint
-npm test
+npm test                  # unit tests (no external dependencies)
+npm run test:integration  # requires docker compose services
 npm run build
+```
+
+## Testing strategy
+
+Three layers, each testing what the layer below cannot:
+
+- **Unit tests** (`test/unit/`, 63 tests) cover the pure logic where
+  correctness matters most and mocking is cheap: the rollout hashing
+  (determinism, 0–99 range, uniform distribution, per-flag independence,
+  monotonicity as percentages increase), the evaluation engine's precedence
+  rules (archived → disabled → targeting → rollout → default) for all three
+  flag types, API key generation/hashing, guards, rate limiting, and the
+  service-layer contracts (audit before/after snapshots, type validation,
+  conflict/not-found handling, cache hit/miss paths).
+- **Integration tests** (`test/integration/`, 11 tests) boot the full NestJS
+  app against real PostgreSQL and Redis and verify what mocks would hide:
+  tenant isolation end to end (tenant B's key gets 403 on tenant A's list,
+  update, delete, and evaluate; flags never leak across list responses),
+  environment scoping (a flag enabled in staging evaluates true there and
+  `disabled` in production), and the audit trail (history accumulates across
+  changes, and no write routes exist for it).
+- **Load test** (`load/k6-evaluate.js`) exercises the evaluation hot path
+  under concurrency — 90% single evaluations, 10% bulk.
+
+With more time: contract tests for error response shapes, property-based
+tests for the evaluation engine, a rate-limiting integration test with a
+clock-controlled window, and soak tests for cache invalidation under
+concurrent writes.
+
+### Load test results
+
+30-second run, 25 virtual users, local (MacBook Pro, API + PostgreSQL 17 +
+Redis 8 in Docker, rate limit raised for the test):
+
+| Metric | Result |
+|--------|--------|
+| Throughput | 1,447 req/s (43,803 requests, 0 failed) |
+| `/evaluate` latency | avg 16.2ms, p90 23.4ms, p95 28.4ms |
+| `/evaluate/bulk` latency | avg 23.2ms, p90 33.9ms, p95 41.9ms |
+| Checks | 83,230 / 83,230 passed |
+
+Run it yourself:
+
+```bash
+npm run start:prod &   # with RATE_LIMIT_PER_MINUTE=1000000
+docker run --rm -i -e BASE_URL=http://host.docker.internal:3010 \
+  grafana/k6 run - < load/k6-evaluate.js
 ```
 
 ## Architecture
