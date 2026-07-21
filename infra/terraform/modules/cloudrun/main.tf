@@ -115,9 +115,9 @@ resource "google_cloud_run_v2_service" "api" {
     }
   }
 
-  # Traffic splitting for canary / blue-green is managed by the deploy
-  # workflow via `gcloud run services update-traffic`, not by Terraform, so
-  # a terraform apply does not reset a partial canary rollout.
+  # New images and traffic splits are rolled out with `gcloud run deploy` and
+  # `gcloud run services update-traffic` (see infra/README.md), not by
+  # Terraform, so a terraform apply does not reset a partial canary rollout.
   lifecycle {
     ignore_changes = [
       client,

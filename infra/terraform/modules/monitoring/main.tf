@@ -24,16 +24,16 @@ locals {
 
 # Error rate > 5% over a 5-minute window.
 resource "google_monitoring_alert_policy" "error_rate" {
-  display_name = "${var.name_prefix} error rate > 5%"
-  combiner     = "OR"
-  project      = var.project_id
+  display_name          = "${var.name_prefix} error rate > 5%"
+  combiner              = "OR"
+  project               = var.project_id
   notification_channels = local.channels
 
   conditions {
     display_name = "Cloud Run 5xx rate"
 
     condition_threshold {
-      filter = <<-EOT
+      filter          = <<-EOT
         resource.type = "cloud_run_revision"
         AND resource.labels.service_name = "${var.service_name}"
         AND metric.type = "run.googleapis.com/request_count"
@@ -59,22 +59,22 @@ resource "google_monitoring_alert_policy" "error_rate" {
   }
 
   documentation {
-    content   = "Feature-flag API 5xx rate exceeded threshold. Check Cloud Logging for correlation IDs and consider rolling back the canary revision."
+    content   = "Feature-flag API 5xx rate exceeded threshold. Check Cloud Logging for correlation IDs and consider routing traffic back to the previous revision."
     mime_type = "text/markdown"
   }
 }
 
 resource "google_monitoring_alert_policy" "latency" {
-  display_name = "${var.name_prefix} p95 latency high"
-  combiner     = "OR"
-  project      = var.project_id
+  display_name          = "${var.name_prefix} p95 latency high"
+  combiner              = "OR"
+  project               = var.project_id
   notification_channels = local.channels
 
   conditions {
     display_name = "Cloud Run request latency p95 > 500ms"
 
     condition_threshold {
-      filter = <<-EOT
+      filter          = <<-EOT
         resource.type = "cloud_run_revision"
         AND resource.labels.service_name = "${var.service_name}"
         AND metric.type = "run.googleapis.com/request_latencies"
@@ -96,9 +96,9 @@ resource "google_monitoring_alert_policy" "latency" {
 }
 
 resource "google_monitoring_alert_policy" "health" {
-  display_name = "${var.name_prefix} health check failures"
-  combiner     = "OR"
-  project      = var.project_id
+  display_name          = "${var.name_prefix} health check failures"
+  combiner              = "OR"
+  project               = var.project_id
   notification_channels = local.channels
 
   conditions {

@@ -110,15 +110,15 @@ module "secrets" {
 }
 
 module "cloudsql" {
-  source              = "../../modules/cloudsql"
-  project_id          = var.project_id
-  region              = var.region
-  name_prefix         = local.name_prefix
-  labels              = local.labels
-  network_id          = module.networking.network_id
+  source                 = "../../modules/cloudsql"
+  project_id             = var.project_id
+  region                 = var.region
+  name_prefix            = local.name_prefix
+  labels                 = local.labels
+  network_id             = module.networking.network_id
   private_vpc_connection = module.networking.private_vpc_connection
-  tier                = var.db_tier
-  db_password_secret  = module.secrets.db_password_secret_id
+  tier                   = var.db_tier
+  db_password_secret     = module.secrets.db_password_secret_id
 
   depends_on = [module.networking, module.secrets]
 }
@@ -156,20 +156,20 @@ module "artifact_registry" {
 }
 
 module "cloudrun" {
-  source                 = "../../modules/cloudrun"
-  project_id             = var.project_id
-  region                 = var.region
-  name_prefix            = local.name_prefix
-  labels                 = local.labels
-  image                  = var.image
-  runtime_sa             = module.iam.runtime_email
-  vpc_network_name       = module.networking.network_name
-  vpc_subnet_name        = module.networking.subnet_name
-  database_url_secret    = module.secrets.database_url_secret_id
-  redis_url_secret       = module.secrets.redis_url_secret_id
-  min_instances          = var.cloud_run_min_instances
-  max_instances          = var.cloud_run_max_instances
-  cloudsql_connection    = module.cloudsql.connection_name
+  source              = "../../modules/cloudrun"
+  project_id          = var.project_id
+  region              = var.region
+  name_prefix         = local.name_prefix
+  labels              = local.labels
+  image               = var.image
+  runtime_sa          = module.iam.runtime_email
+  vpc_network_name    = module.networking.network_name
+  vpc_subnet_name     = module.networking.subnet_name
+  database_url_secret = module.secrets.database_url_secret_id
+  redis_url_secret    = module.secrets.redis_url_secret_id
+  min_instances       = var.cloud_run_min_instances
+  max_instances       = var.cloud_run_max_instances
+  cloudsql_connection = module.cloudsql.connection_name
 
   depends_on = [
     module.cloudsql,
