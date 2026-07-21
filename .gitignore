@@ -1,0 +1,13 @@
+node_modules/
+dist/
+coverage/
+.env
+*.log
+.DS_Store
+1784325272226_CT_-_Take_Home_Test_-_Software_Engineer_-_Backend_Platform_-_Option_C_Feature_Flags.pdf
+
+# Local database volumes and Terraform state
+.data/
+*.tfstate
+*.tfstate.*
+.terraform/
