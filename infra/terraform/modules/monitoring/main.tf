@@ -85,7 +85,7 @@ resource "google_monitoring_alert_policy" "latency" {
 
       aggregations {
         alignment_period   = "60s"
-        per_series_aligner = "ALIGN_DELTA"
+        per_series_aligner = "ALIGN_PERCENTILE_95"
       }
 
       trigger {

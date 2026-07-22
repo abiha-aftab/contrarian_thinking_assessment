@@ -4,7 +4,8 @@ variable "name_prefix" { type = string }
 variable "labels" { type = map(string) }
 variable "image" { type = string }
 variable "runtime_sa" { type = string }
-variable "vpc_connector_id" { type = string }
+variable "vpc_network_name" { type = string }
+variable "vpc_subnet_name" { type = string }
 variable "database_url_secret" { type = string }
 variable "redis_url_secret" { type = string }
 variable "cloudsql_connection" { type = string }
@@ -26,9 +27,13 @@ resource "google_cloud_run_v2_service" "api" {
       max_instance_count = var.max_instances
     }
 
+    # Direct VPC egress — no Serverless VPC Access connector required.
     vpc_access {
-      connector = var.vpc_connector_id
-      egress    = "PRIVATE_RANGES_ONLY"
+      egress = "PRIVATE_RANGES_ONLY"
+      network_interfaces {
+        network    = var.vpc_network_name
+        subnetwork = var.vpc_subnet_name
+      }
     }
 
     volumes {
@@ -76,10 +81,7 @@ resource "google_cloud_run_v2_service" "api" {
         value = "production"
       }
 
-      env {
-        name  = "PORT"
-        value = "3000"
-      }
+      # PORT is set automatically by Cloud Run from container_port — do not set it.
 
       env {
         name  = "LOG_LEVEL"

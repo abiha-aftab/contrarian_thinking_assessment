@@ -3,7 +3,7 @@
 Multi-tenant feature flag and runtime configuration API for the Contrarian
 Thinking Backend & Platform take-home (Option C).
 
-**Deployed URL:** _pending_
+**Deployed URL:** https://ff-staging-api-cwbt3zcdkq-uc.a.run.app
 
 ## Local setup
 

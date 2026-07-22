@@ -8,7 +8,7 @@ Terraform modules that provision the GCP stack for the feature-flag service.
 infra/terraform/
 ├── modules/           # Reusable building blocks
 │   ├── apis/
-│   ├── networking/    # VPC, private service access, Serverless VPC connector
+│   ├── networking/    # VPC, private service access
 │   ├── iam/           # Least-privilege runtime service account
 │   ├── secrets/       # Secret Manager (DB password, DATABASE_URL, REDIS_URL)
 │   ├── cloudsql/      # Private IP PostgreSQL 15
@@ -30,7 +30,7 @@ infra/terraform/
 | Cache | Memorystore Redis BASIC | Required; BASIC is enough for staging cost; production can flip to STANDARD_HA |
 | Secrets | Secret Manager | Never bake credentials into images or plain env vars |
 | Images | Artifact Registry | Required by the CI/CD flow |
-| Networking | VPC + Serverless VPC Access | Cloud Run reaches private Cloud SQL / Redis without public IPs |
+| Networking | VPC | Cloud Run reaches private Cloud SQL / Redis |
 | Observability | Cloud Monitoring | Dashboard + alerts for error rate, latency, health |
 
 ## Deployment strategy: Cloud Run canary

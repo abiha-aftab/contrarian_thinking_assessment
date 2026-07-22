@@ -163,7 +163,8 @@ module "cloudrun" {
   labels                 = local.labels
   image                  = var.image
   runtime_sa             = module.iam.runtime_email
-  vpc_connector_id       = module.networking.vpc_connector_id
+  vpc_network_name       = module.networking.network_name
+  vpc_subnet_name        = module.networking.subnet_name
   database_url_secret    = module.secrets.database_url_secret_id
   redis_url_secret       = module.secrets.redis_url_secret_id
   min_instances          = var.cloud_run_min_instances

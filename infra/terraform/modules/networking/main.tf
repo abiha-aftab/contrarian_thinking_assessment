@@ -3,6 +3,10 @@ variable "region" { type = string }
 variable "name_prefix" { type = string }
 variable "labels" { type = map(string) }
 
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
 resource "google_compute_network" "vpc" {
   name                    = "${var.name_prefix}-vpc"
   auto_create_subnetworks = false
@@ -32,22 +36,25 @@ resource "google_service_networking_connection" "private_vpc" {
   reserved_peering_ranges = [google_compute_global_address.private_ip.name]
 }
 
-resource "google_vpc_access_connector" "connector" {
-  name          = "${var.name_prefix}-conn"
-  region        = var.region
-  network       = google_compute_network.vpc.name
-  ip_cidr_range = "10.8.0.0/28"
-  project       = var.project_id
-  min_instances = 2
-  max_instances = 3
+# Cloud Run Direct VPC egress needs the serverless service agent on the subnet.
+resource "google_compute_subnetwork_iam_member" "run_network_user" {
+  project    = var.project_id
+  region     = var.region
+  subnetwork = google_compute_subnetwork.subnet.name
+  role       = "roles/compute.networkUser"
+  member     = "serviceAccount:service-${data.google_project.current.number}@serverless-robot-prod.iam.gserviceaccount.com"
 }
 
 output "network_id" {
   value = google_compute_network.vpc.id
 }
 
-output "vpc_connector_id" {
-  value = google_vpc_access_connector.connector.id
+output "network_name" {
+  value = google_compute_network.vpc.name
+}
+
+output "subnet_name" {
+  value = google_compute_subnetwork.subnet.name
 }
 
 output "private_vpc_connection" {
