@@ -70,12 +70,32 @@ terraform plan
 terraform apply
 ```
 
-Required GitHub Actions secrets for deploy:
+## GitHub Actions → GCP (Workload Identity Federation)
 
-- `GCP_PROJECT_ID`
-- `GCP_WORKLOAD_IDENTITY_PROVIDER`
-- `GCP_DEPLOY_SA` (service account with Cloud Run Admin, Artifact Registry
-  Writer, and Secret Manager accessor)
+Production-standard auth: GitHub OIDC → Workload Identity Pool → deploy
+service account. **No JSON key** is stored in GitHub.
+
+### One-time setup
+
+```bash
+export GCP_PROJECT_ID=future-infusion-503216-p3
+export GITHUB_REPO=abiha-aftab/contrarian_thinking_assessment
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+
+bash scripts/setup-github-wif.sh
+```
+
+The script prints three values. Add them as **repository secrets**:
+
+| Secret | Meaning |
+|--------|---------|
+| `GCP_PROJECT_ID` | GCP project ID |
+| `GCP_DEPLOY_SA` | `github-deploy@….iam.gserviceaccount.com` |
+| `GCP_WORKLOAD_IDENTITY_PROVIDER` | Full provider resource name |
+
+Then push to `main`. The Deploy workflow uses
+`google-github-actions/auth` with `workload_identity_provider` +
+`service_account` and `permissions.id-token: write`.
 
 ## Teardown
 

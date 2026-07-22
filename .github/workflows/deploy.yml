@@ -28,7 +28,6 @@ jobs:
   deploy:
     name: Build, push, canary deploy
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'staging' }}
     steps:
       - uses: actions/checkout@v4
 
