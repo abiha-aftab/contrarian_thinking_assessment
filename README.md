@@ -1,26 +1,13 @@
 # Multi-Tenant Feature Flag Service
 
-A production-oriented feature flag and runtime configuration service built for
-the Contrarian Thinking Backend & Platform take-home assessment.
+Multi-tenant feature flag and runtime configuration API for the Contrarian
+Thinking Backend & Platform take-home (Option C).
 
-## Current status
-
-Phases 1–6 establish the NestJS application, PostgreSQL/Prisma data model,
-Redis connection, structured request logging, correlation IDs, health checks,
-tenant registration with hashed API keys, tenant-scoped authentication guards,
-per-tenant rate limiting, full feature flag CRUD with environment-scoped
-configs, soft-delete (archive), an immutable audit trail, the deterministic
-flag evaluation engine with Redis caching and Prometheus metrics, a production
-Docker image, modular Terraform for GCP, and GitHub Actions CI/CD with Cloud
-Run canary deployment. Phase 7 completes documentation and the live GCP
-deployment URL.
-
-## Prerequisites
-
-- Node.js 22 (see `.nvmrc`)
-- Docker with Docker Compose
+**Deployed URL:** _pending_
 
 ## Local setup
+
+**Prerequisites:** Node.js 22 (`.nvmrc`), Docker Compose.
 
 ```bash
 nvm use
@@ -32,378 +19,143 @@ npm run prisma:migrate -- --name init
 npm run start:dev
 ```
 
-Or run the full stack (API + Postgres + Redis) in containers:
+Full stack: `docker compose up --build` → `http://localhost:3000`
 
-```bash
-docker compose up --build
-```
+Health: `GET /health/live`, `GET /health/ready`
 
-The API listens on `http://localhost:3000`.
+## Technology choices
 
-## Health checks
+| Area | Choice | Reason |
+|------|--------|--------|
+| Framework | NestJS + TypeScript | Modules, guards, and DI fit multi-tenant API design |
+| Database | PostgreSQL (Prisma) | Relational model for tenants, flags, audit trail |
+| Cache | Redis | Low-latency config reads and per-tenant rate limiting |
+| Compute | Cloud Run | Fast deploy, revision-based canary traffic splitting |
+| IaC | Terraform | Modular, separate staging/production environments |
+| Secrets | GCP Secret Manager | DB/Redis credentials not in plain env vars |
+| CI/CD | GitHub Actions | Lint → test → build → canary deploy with rollback |
 
-- `GET /health/live` confirms the application process is running.
-- `GET /health/ready` confirms PostgreSQL and Redis are reachable.
+## Architecture
+
+Clients authenticate with a per-tenant API key. Guards validate the key
+(SHA-256 hash, prefix lookup), enforce tenant isolation, and apply per-tenant
+rate limits via Redis. Domain modules handle tenant registration, flag CRUD
+with audit logging, and flag evaluation.
+
+**Evaluation flow:** auth → rate limit → Redis config cache (hit) or
+PostgreSQL (miss, then cache write) → deterministic hash → response.
+
+**Flag update flow:** auth → PostgreSQL transaction (flag update + audit
+insert) → Redis cache invalidation.
+
+### Database schema
+
+- **Tenant** — `name`, `slug`
+- **Environment** — `development`, `staging`, `production` (one set per tenant)
+- **ApiKey** — `key_hash`, `key_prefix`, `active`
+- **FeatureFlag** — `flag_key`, `type`, `default_value`, `status`
+- **FlagEnvironmentConfig** — `enabled`, `rollout_percentage`, `targeting_rules`, `variant_value`
+- **AuditLog** — append-only: `actor`, `action`, `before_value`, `after_value`
+
+Flag identity (`key`, `type`, `defaultValue`) is separate from per-environment
+behavior so production changes do not affect staging.
 
 ## API
 
-All API routes are prefixed with `/api/v1`.
+Base path: `/api/v1`. Tenant-scoped routes use `Authorization: Bearer <api_key>`.
 
-### Register a tenant
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/tenants` | Register tenant; returns API key and three environments |
+| POST | `/tenants/{id}/flags` | Create flag (`key`, `type`, `defaultValue`) |
+| GET | `/tenants/{id}/flags` | List flags; filter by `environment`, `status` |
+| PUT | `/tenants/{id}/flags/{key}` | Update flag; env fields need `environment` |
+| DELETE | `/tenants/{id}/flags/{key}` | Archive flag (soft-delete) |
+| GET | `/tenants/{id}/flags/{key}/history` | Audit history (newest first) |
+| POST | `/evaluate` | Evaluate one flag for a user/context |
+| POST | `/evaluate/bulk` | Evaluate all active flags for a user/context |
+| GET | `/metrics` | Prometheus metrics |
 
-```bash
-curl -X POST http://localhost:3000/api/v1/tenants \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "Checkout App"}'
-```
+**Flag types:** `boolean`, `string`, `number`.
 
-Response (`201 Created`):
+**Per-environment fields:** `enabled`, `rolloutPercentage` (0–100),
+`targetingRules`, `variantValue`.
 
-```json
-{
-  "tenant": {
-    "id": "3f6f6f6a-...",
-    "name": "Checkout App",
-    "slug": "checkout-app",
-    "createdAt": "2026-07-21T14:35:25.706Z",
-    "environments": [
-      { "id": "...", "name": "development" },
-      { "id": "...", "name": "staging" },
-      { "id": "...", "name": "production" }
-    ]
-  },
-  "apiKey": "ffk_XXXXXXXX_..."
-}
-```
+**Evaluate request body:** `tenant_id`, `environment`, `user_id`, `context`.
+Single evaluate also requires `flag_key`.
 
-The `apiKey` is returned exactly once and is never stored in plaintext; keep it
-safe. A duplicate tenant name returns `409 Conflict`.
+**Evaluate response:** `value` and `reason` (`archived`, `disabled`,
+`targeting_match`, `rollout`, `not_in_rollout`).
 
-### Authentication
+API keys are returned once at registration and stored as SHA-256 hashes.
+Audit records are written in the same transaction as flag changes.
 
-Tenant-scoped endpoints (added in later phases) require the API key as a
-bearer token:
-
-```
-Authorization: Bearer ffk_XXXXXXXX_...
-```
-
-Keys are stored as SHA-256 hashes. Because API keys are high-entropy random
-values (unlike passwords), a fast digest is appropriate and keeps per-request
-verification cheap. Lookup uses an indexed key prefix and a constant-time hash
-comparison. A key for one tenant cannot access another tenant's resources
-(`403 Forbidden`).
-
-### Feature flags
-
-All flag endpoints require the tenant's API key and are scoped to
-`/api/v1/tenants/{tenantId}/flags`. A key for another tenant receives
-`403 Forbidden`; a missing key receives `401 Unauthorized`.
-
-Create a flag (`201 Created`). A config is created for each of the tenant's
-three environments, initially disabled with a 0% rollout:
-
-```bash
-curl -X POST "$BASE/tenants/$TENANT_ID/flags" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"key":"new-checkout","description":"New checkout flow","type":"boolean","defaultValue":false}'
-```
-
-Flag types are `boolean`, `string`, and `number`; the `defaultValue` (and any
-`variantValue`) must match the declared type or the request fails with `400`.
-Duplicate keys within a tenant fail with `409`.
-
-Update a flag (`200 OK`). `description` and `defaultValue` are flag-level;
-`enabled`, `rolloutPercentage` (0–100), `targetingRules`, and `variantValue`
-are environment-level and require `environment`:
-
-```bash
-curl -X PUT "$BASE/tenants/$TENANT_ID/flags/new-checkout" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{"environment":"production","enabled":true,"rolloutPercentage":25}'
-```
-
-Targeting rules are a list of context-attribute matches, e.g.
-`[{"attribute":"country","values":["US","CA"]}]`.
-
-List flags with optional filters (`200 OK`):
-
-```bash
-curl "$BASE/tenants/$TENANT_ID/flags?environment=production&status=active" \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-Archive (soft-delete) a flag (`200 OK`). Archived flags remain listable via
-`status=archived` but can no longer be updated (`404`):
-
-```bash
-curl -X DELETE "$BASE/tenants/$TENANT_ID/flags/new-checkout" \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-### Audit history
-
-Every create, update, and archive writes an append-only audit record in the
-same database transaction as the change itself, capturing the actor (API key
-prefix), the action, and full before/after snapshots. There are no update or
-delete endpoints for audit records.
-
-```bash
-curl "$BASE/tenants/$TENANT_ID/flags/new-checkout/history" \
-  -H "Authorization: Bearer $API_KEY"
-```
-
-Response entries are newest-first:
-
-```json
-[
-  {
-    "id": "…",
-    "actor": "apikey:VJJd26vW",
-    "action": "updated",
-    "beforeValue": { "environments": { "production": { "enabled": false } } },
-    "afterValue": { "environments": { "production": { "enabled": true } } },
-    "createdAt": "2026-07-21T14:52:00.000Z"
-  }
-]
-```
-
-### Flag evaluation
-
-Evaluate a single flag for a user (`200 OK`). The `tenant_id` in the body must
-match the API key's tenant or the request fails with `403`:
-
-```bash
-curl -X POST "$BASE/evaluate" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{
-    "tenant_id": "'$TENANT_ID'",
-    "environment": "production",
-    "user_id": "user-123",
-    "flag_key": "new-checkout",
-    "context": { "country": "US" }
-  }'
-```
-
-```json
-{ "flag_key": "new-checkout", "value": true, "reason": "rollout" }
-```
-
-Bulk-evaluate all active flags for a user in one request:
-
-```bash
-curl -X POST "$BASE/evaluate/bulk" \
-  -H "Authorization: Bearer $API_KEY" -H 'Content-Type: application/json' \
-  -d '{
-    "tenant_id": "'$TENANT_ID'",
-    "environment": "production",
-    "user_id": "user-123",
-    "context": { "country": "US" }
-  }'
-```
-
-```json
-{
-  "environment": "production",
-  "user_id": "user-123",
-  "flags": {
-    "new-checkout": { "value": true, "reason": "rollout" },
-    "banner-text": { "value": "variant-a", "reason": "targeting_match" }
-  }
-}
-```
-
-The spec leaves the single-evaluate body open; this implementation requires a
-`flag_key` there and treats `/evaluate/bulk` as the way to fetch everything.
-
-### How percentage rollouts work
-
-Each `(flag_key, user_id)` pair is hashed with SHA-256 and the first 8 hex
-characters are mapped to a bucket in `[0, 100)`:
+## Flag evaluation algorithm
 
 ```
 bucket = parseInt(sha256("<flag_key>:<user_id>").slice(0, 8), 16) % 100
 ```
 
-A user is in the rollout when `bucket < rolloutPercentage`. This gives three
-properties that matter for gradual rollouts:
+User is in rollout when `bucket < rolloutPercentage`.
 
-1. **Deterministic** — the same user always gets the same value for a flag; no
-   state is stored per user.
-2. **Monotonic** — raising the percentage only ever adds users; nobody who has
-   the feature loses it (their bucket does not change).
-3. **Independent per flag** — the flag key is part of the hash, so a user's
-   position in one flag's rollout says nothing about their position in
-   another's.
+- **Deterministic** — same user always gets the same bucket for a flag
+- **Monotonic** — increasing rollout % only adds users
+- **Independent per flag** — flag key is part of the hash input
 
-Evaluation order per flag: archived → serve default; disabled in the
-environment → serve default; a targeting rule matches the context (e.g.
-`context.country ∈ {US, CA}`) → serve the on-value, bypassing the rollout;
-otherwise the rollout bucket decides. The on-value is `variantValue` when set,
-`true` for boolean flags without one. Every response includes the `reason`
-(`archived`, `disabled`, `targeting_match`, `rollout`, `not_in_rollout`).
+**Order:** archived → default → disabled → default → targeting match →
+on-value → in rollout → on-value → else default.
 
-### Caching strategy
+## Caching strategy
 
-Single-flag evaluation reads the flag's environment config through Redis
-(`flagcfg:{tenant}:{env}:{flagKey}`, 5-minute TTL). Every flag mutation
-deletes the affected keys in the same request, so evaluations reflect changes
-immediately; the TTL only bounds staleness if an invalidation is ever missed.
-Bulk evaluation queries PostgreSQL directly: it is a bootstrap operation for
-client startup rather than a hot path, and caching per-tenant flag lists
-would complicate invalidation for little gain. Evaluated results are not
-cached; the hash is cheap and caching per-user results would multiply
-cardinality.
+Single-flag evaluation caches environment config in Redis (5-minute TTL).
+Flag mutations invalidate affected keys. Bulk evaluation reads PostgreSQL
+directly. Evaluation results are not cached.
 
-### Metrics
+## Observability
 
-`GET /metrics` (no auth, outside `/api/v1`) exposes Prometheus metrics:
+Structured JSON logging with `x-correlation-id`. Prometheus metrics for
+evaluation latency, evaluation count, cache hit/miss, and HTTP errors by
+tenant. Cloud Monitoring dashboard and alerts provisioned via Terraform.
 
-- `flag_evaluation_duration_seconds` histogram (labels: `tenant`, `mode`) for
-  p50/p95/p99 latency
-- `flag_evaluations_total` counter (labels: `tenant`, `mode`)
-- `flag_config_cache_events_total` counter (labels: `result` = `hit`/`miss`)
-- `http_requests_total` counter (labels: `method`, `route`, `status`,
-  `tenant`) for per-tenant/per-endpoint error rates
-- Node.js runtime defaults (memory, event loop lag, GC)
-
-### Rate limiting
-
-Authenticated requests are limited per tenant (default 300 requests/minute,
-configurable via `RATE_LIMIT_PER_MINUTE`) using a fixed one-minute Redis
-window. Exceeding the limit returns `429 Too Many Requests` with a
-`Retry-After` header.
-
-## Quality checks
+## Testing
 
 ```bash
-npm run lint
-npm test                  # unit tests (no external dependencies)
-npm run test:integration  # requires docker compose services
-npm run build
+npm run lint && npm test && npm run test:integration && npm run build
 ```
 
-## Testing strategy
+- **Unit tests (63):** rollout hashing, evaluation logic, auth, rate limits, audit
+- **Integration tests (11):** tenant isolation, environment scoping, audit trail
+- **Load test (`load/k6-evaluate.js`):** 1,447 req/s, p95 ~28ms on `/evaluate`, 0 failures (local, 25 VUs, 30s)
 
-Three layers, each testing what the layer below cannot:
+## Infrastructure & deployment
 
-- **Unit tests** (`test/unit/`, 63 tests) cover the pure logic where
-  correctness matters most and mocking is cheap: the rollout hashing
-  (determinism, 0–99 range, uniform distribution, per-flag independence,
-  monotonicity as percentages increase), the evaluation engine's precedence
-  rules (archived → disabled → targeting → rollout → default) for all three
-  flag types, API key generation/hashing, guards, rate limiting, and the
-  service-layer contracts (audit before/after snapshots, type validation,
-  conflict/not-found handling, cache hit/miss paths).
-- **Integration tests** (`test/integration/`, 11 tests) boot the full NestJS
-  app against real PostgreSQL and Redis and verify what mocks would hide:
-  tenant isolation end to end (tenant B's key gets 403 on tenant A's list,
-  update, delete, and evaluate; flags never leak across list responses),
-  environment scoping (a flag enabled in staging evaluates true there and
-  `disabled` in production), and the audit trail (history accumulates across
-  changes, and no write routes exist for it).
-- **Load test** (`load/k6-evaluate.js`) exercises the evaluation hot path
-  under concurrency — 90% single evaluations, 10% bulk.
+Terraform in `infra/terraform/` provisions Cloud Run, Cloud SQL, Memorystore,
+VPC, IAM, Secret Manager, Artifact Registry, and Cloud Monitoring. Staging and
+production are separate environments. See [`infra/README.md`](infra/README.md).
 
-With more time: contract tests for error response shapes, property-based
-tests for the evaluation engine, a rate-limiting integration test with a
-clock-controlled window, and soak tests for cache invalidation under
-concurrent writes.
+**Canary deploy:** build image → deploy at 0% traffic → health smoke tests →
+traffic 10% → 50% → 100% → rollback on failure.
 
-### Load test results
+**CI:** lint → unit tests → build → integration tests → Docker build.
 
-30-second run, 25 virtual users, local (MacBook Pro, API + PostgreSQL 17 +
-Redis 8 in Docker, rate limit raised for the test):
+## Assumptions
 
-| Metric | Result |
-|--------|--------|
-| Throughput | 1,447 req/s (43,803 requests, 0 failed) |
-| `/evaluate` latency | avg 16.2ms, p90 23.4ms, p95 28.4ms |
-| `/evaluate/bulk` latency | avg 23.2ms, p90 33.9ms, p95 41.9ms |
-| Checks | 83,230 / 83,230 passed |
+- `POST /evaluate` requires `flag_key`; `/evaluate/bulk` returns all active flags
+- Tenant registration is unauthenticated
+- Audit actor is the API key prefix
+- Targeting rules are attribute allow-list equality
+- Archived flags return the default value
 
-Run it yourself:
+## Trade-offs
 
-```bash
-npm run start:prod &   # with RATE_LIMIT_PER_MINUTE=1000000
-docker run --rm -i -e BASE_URL=http://host.docker.internal:3010 \
-  grafana/k6 run - < load/k6-evaluate.js
-```
+| Decision | Alternative | Why this choice |
+|----------|-------------|-----------------|
+| SHA-256 for API keys | bcrypt/argon2 | Keys are random high-entropy values, not guessable passwords; bcrypt would add latency on every request |
+| Cache flag configs | Cache per-user results | Evaluation hash is cheap; per-user caching multiplies Redis key cardinality |
+| Cloud Run | GKE | Revision traffic splitting gives canary/rollback without operating a cluster |
+| Fixed-window rate limit | Sliding window | One Redis `INCR` per request; simpler and fast enough for noisy-neighbor protection |
 
-## Containerization
+## Future improvements
 
-The production image (`docker/Dockerfile`) is a multi-stage build:
-
-1. **build** — `npm ci` + Prisma generate + NestJS compile
-2. **prod-deps** — production `npm ci --omit=dev` + Prisma generate
-3. **runtime** — Debian slim, non-root `app` user, `tini` init, healthcheck
-   against `/health/live`, entrypoint that optionally runs
-   `prisma migrate deploy`
-
-Local full-stack:
-
-```bash
-docker compose up --build
-curl http://localhost:3000/health/ready
-```
-
-## Infrastructure & deployment (GCP)
-
-See [`infra/README.md`](infra/README.md) for the full Terraform layout and
-first-time setup. Summary of choices:
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Compute | Cloud Run | Public URL in minutes; native canary traffic splitting; scales to zero |
-| Database | Cloud SQL PostgreSQL 15 (private IP) | Required; managed backups/PITR |
-| Cache | Memorystore Redis 7 BASIC | Required; BASIC keeps staging cheap |
-| Secrets | Secret Manager | DB password / `DATABASE_URL` / `REDIS_URL` never in plain env |
-| Images | Artifact Registry | Fed by the deploy workflow |
-| Networking | VPC + Serverless VPC Access | Cloud Run reaches private SQL/Redis |
-
-### Canary deployment & rollback
-
-The [deploy workflow](.github/workflows/deploy.yml) implements canary:
-
-1. Build/push image tagged with the git SHA.
-2. `gcloud run deploy --no-traffic --tag=canary` → new revision at **0%**.
-3. Smoke `/health/live` and `/health/ready` against the tagged canary URL.
-4. Shift traffic 10% → 50% → 100%.
-5. On any failure after the deploy step, traffic is routed back to the
-   previous revision (automatic rollback).
-
-Terraform provisions the service once and then ignores image/traffic so a
-`terraform apply` cannot clobber an in-progress canary.
-
-### CI pipeline
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every PR/push:
-
-Lint → unit tests → build → integration tests (Postgres + Redis service
-containers) → Docker image build (no push).
-
-### Observability on GCP
-
-Terraform creates a Cloud Monitoring dashboard (request rate, latency, 5xx,
-instance count) and alert policies for:
-
-- Error rate spikes (>5% over a 5-minute window)
-- Elevated request latency
-- Health / instance availability failures
-
-Application-level Prometheus metrics (`/metrics`) complement these with
-per-tenant evaluation latency, evaluation counts, and cache hit/miss ratios.
-In a longer engagement these would be scraped into Cloud Monitoring via the
-Managed Service for Prometheus; for the take-home the Cloud Run request
-metrics cover the operational alerts.
-
-## Architecture
-
-The application is organized by domain module. PostgreSQL is the source of
-truth, Redis supports low-latency evaluation caching and tenant rate limiting,
-and all incoming requests receive an `x-correlation-id` included in structured
-JSON logs.
-
-Detailed API documentation, evaluation algorithm, GCP architecture, deployment
-strategy, test results, assumptions, and trade-offs will be added as their
-implementation phases are completed.
+Real-time flag updates (SSE/WebSocket), API key rotation, richer targeting,
+pagination, Managed Prometheus, multi-region deployment.
